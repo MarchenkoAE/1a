@@ -1,0 +1,166 @@
+﻿Создание формы авторизации
+Внешний вид:
+Для начала нужно создать форму. Обычно на ней не много элементов, достаточно двух textbox`ов (с label к каждому из них) и кнопки.
+  
+
+Функция для получения пользователя по его логину и паролю:
+        public static User GetUser(string login, string password)
+        {
+            using (SqlConnection conn = new SqlConnection(ConnStr))
+            {
+                
+                conn.Open();
+                string sql = "SELECT  [ID], [Password], [FirstName], [MiddleName], [LastName], [Login], [IsDeleted] " +
+                             "FROM [User] " +
+                             "WHERE [Login] = @login " +
+                             "AND [Password] = @password " +
+                             "AND [IsDeleted] = 0";
+
+
+                SqlCommand cmd = new SqlCommand(sql, conn);
+
+
+                cmd.Parameters.AddWithValue("login", login);
+                cmd.Parameters.AddWithValue("password", password);
+
+
+                SqlDataReader reader = cmd.ExecuteReader();
+
+
+                if (reader.Read())
+                {
+                    User user = new User
+                    {
+                        ID = reader.GetInt32(0),
+                        Password = reader.GetString(1),
+                        FirstName = reader.GetString(2),
+                        MiddleName = reader.GetString(3),
+                        LastName = reader.GetString(4),
+                        Login = reader.GetString(5),
+                        IsDeleted = reader.GetBoolean(6)
+                    };
+                    return user;
+                }
+
+
+                throw new Exception("Пользователь не найден. Проверьте правильность данных и повторите попытку входа.");
+            }
+        }
+Сначала все соответствует шаблону. Используется подключение, оно же открывается. В запросе стоит перечислить все получаемые поля, это пригодится позже.
+@login и @password – это параметры. Они гораздо безопаснее просто вставки строк. В остальном ничем не отличаются.
+Поскольку это просто запрос, который не должен получать DataSet, создается команда cmd. После этого можно присвоить параметрам значения, используя AddWithValue("имя параметра", значения). Учтите, что имя параметра должно писаться полностью идентично запросу, но без символа @. После присвоения параметрам значений создается reader.
+Если этот reader читает что-нибудь, создается новая переменная типа User, заполняется через функции Get*название типа*(ряд) и возвращается. Если же ничего не прочиталось, кидается исключение, что такого пользователя нет.
+Код формы:
+Весь код на данной форме находится в кнопке:
+        private void LoginBtn_Click(object sender, EventArgs e)
+        {
+            User user;
+            try
+            {
+                user = DataWork.GetUser(LoginTxt.Text, PasswordTxt.Text);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+                return;
+            }
+
+
+            this.Hide();
+            MainForm MF = new MainForm(user);
+            MF.ShowDialog();
+
+
+            LoginTxt.Text = String.Empty;
+            PasswordTxt.Text = String.Empty;
+            this.Show();
+        }
+Код состоит, по сути, из трех частей, не считая объявления переменной user. 
+Первая часть пытается с помощью try..catch присвоить пользователю значение, используя написанную ранее функцию. Если у неё не получается, catch выводит сообщение полученной ошибки и завершает работу функции (return).
+Вторая часть прячет данную форму, создает следующую и показывает в режиме диалогового окна (это важно). Заодно, при создании следующей формы, мы передаем ей полученного пользователя, чтобы она могла дальше с ним работать.
+Третья часть срабатывает тогда, когда закрывается следующая форма, в данном случае – MainForm. Она очищает поля и снова показывает форму авторизации.
+Шифрование пароля
+Для начала нужно подключить библиотеку: using System.Security.Cryptography;
+Для шифрования используйте функцию:
+        public static string GetHash(string login, string password)
+        {
+            string salt1 = "^8{-";
+            string salt2 = "&>nm";
+            string pass = login + salt1 + password + salt2;
+
+
+            using (var hash = SHA256.Create())
+            {
+                return string.Concat(hash.ComputeHash(Encoding.UTF8.GetBytes(pass)).Select(x => x.ToString("X2")));
+            }
+ }
+Salt1 и salt2 – это соль – неизменная часть, прибавляющаяся к паролю спереди и/или сзади. Логин передается как изменяемая часть – перец. Сама функция шифрует получившуюся строку по алгоритму SHA256.
+Для того, чтобы проверять пароль с шифрованием, надо изменить параметр, подставляемый вместо пароля в запрос на пользователя: 
+cmd.Parameters.AddWithValue("password", GetHash(login, password));
+Это, правда, может создать проблему того, что теперь в базе пароли тоже должны быть зашифрованы по тому же самому алгоритму. Учитывая, что интернетом для этого пользоваться не получится, можно, например, переписать все пароли такой функцией (объяснений не будет, потому что никто в здравом уме такое делать не будет):
+        public static void HashAllPasswords()
+        {
+            List<User> list = GetUserList();
+            foreach (var user in list)
+            {
+                HashPassword(user);
+            }
+        }
+
+
+        public static List<User> GetUserList()
+        {
+            List<User> list = new List<User>();
+            using (SqlConnection conn = new SqlConnection(ConnStr))
+            {
+                conn.Open();
+                string sql = "select ID, [Login], [Password] " +
+                             "from[User] ";
+                SqlCommand cmd = new SqlCommand(sql, conn);
+                SqlDataReader reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    User user = new User();
+                    user.ID = reader.GetInt32(0);
+                    user.Login = reader.GetString(1);
+                    user.Password = reader.GetString(2);
+                    list.Add(user);
+                }
+                return list;
+            }
+        }
+
+
+        public static void HashPassword(User user)
+        {
+            using (SqlConnection conn = new SqlConnection(ConnStr))
+            {
+                conn.Open();
+                string sql = "update [User] set [Password] = @password where [User].ID = @id";
+                SqlCommand cmd = new SqlCommand(sql,conn);
+                cmd.Parameters.AddWithValue("password", GetHash(user.Login, user.Password));
+                cmd.Parameters.AddWithValue("id", user.ID);
+                cmd.ExecuteNonQuery();
+            }
+}
+Учитывайте, что её нужно прогнать только ОДИН раз.
+Другой вариант: проверять, зашифрован ли пароль и шифровать его, если нет. Проблема этого метода в том, что, если действовать самым очевидным методом и просто проверять, совпадает ли напрямую пароль с тем, который уже в БД, если какой-нибудь умник попробует войти с тем шифром, который вы получили в итоге, он не только это сделает, но и перепишет пароль. Поскольку реализация этого займет только больше времени, а результат получается отрицательный, никакого кода для него не будет.
+Проверка роли пользователя
+Для того, чтобы узнать роль пользователя, когда они разнесены по разным таблицам, можно воспользоваться таким запросом:
+        public static bool IsExec(User user)
+        {
+            using (SqlConnection conn = new SqlConnection(ConnStr))
+            {
+                conn.Open();
+                string sql = "select * from [Executor] where ID = @id";
+                SqlCommand cmd = new SqlCommand(sql,conn);
+                cmd.Parameters.AddWithValue("id", user.ID);
+                SqlDataReader reader = cmd.ExecuteReader();
+                return reader.HasRows();
+  }
+Функция bool, т.е. логическая. Запросом мы выбираем все подходящие поля в другой таблице. В данном случае ID пользователей и ID исполнителей совпадали, поэтому запрос достаточно простой. Здесь используется HasRows() – тоже логическая функция, которая возвращает, есть ли ряды в полученных по запросу данных. 
+Используется эта функция максимально прямо:
+      if (IsExec(user))
+      {
+         *делаете, что вам нужно*
+}
